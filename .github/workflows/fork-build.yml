@@ -48,7 +48,7 @@ jobs:
     runs-on: ubuntu-24.04
     container: swift:6.1-noble
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with: { ref: "${{ inputs.ref }}" }
 
       - name: swift test
@@ -57,7 +57,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: jellyfinkit-tests
           path: test-results*.xml
@@ -75,7 +75,7 @@ jobs:
           apt-get install -y --no-install-recommends \
             libgtk-4-dev libvlc-dev pkg-config g++ git ca-certificates
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with: { ref: "${{ inputs.ref }}" }
 
       # Same steps as linux-packages.yml, without packaging, signing and publishing.
@@ -99,7 +99,7 @@ jobs:
           cp -R "$BUILD_DIR"/*.resources out/swiftly-linux/ 2>/dev/null || true
           tar -C out -czf swiftly-linux-x86_64.tar.gz swiftly-linux
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: swiftly-linux-x86_64
           path: swiftly-linux-x86_64.tar.gz
@@ -116,7 +116,7 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with: { ref: "${{ inputs.ref }}" }
 
       # build.ps1 and rlottie-build.ps1 expect the repository at C:\swiftly and the
@@ -173,7 +173,7 @@ jobs:
           if (Test-Path Windows\bau.log) { Get-Content Windows\bau.log -Tail 200 }
           if (Test-Path C:\Werkzeuge\rlottie.log) { Get-Content C:\Werkzeuge\rlottie.log -Tail 50 }
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: swiftly-windows-x64
           path: |
@@ -196,11 +196,11 @@ jobs:
       SWIFT_JAVA_VERSION: "0.6.0"
       NDK_VERSION: "27.3.13750724"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with: { ref: "${{ inputs.ref }}" }
 
       - name: JDK 25 (swiftkit-core) and JDK 21 (app)
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: |
@@ -256,7 +256,7 @@ jobs:
         run: ./gradlew :phone:testDirectDebugUnitTest --no-daemon
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: swiftly-android-direct-debug
           path: Android/phone/build/outputs/apk/direct/debug/*.apk
@@ -264,7 +264,7 @@ jobs:
 
       - name: Upload unit test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: android-unit-tests
           path: Android/phone/build/reports/tests/
