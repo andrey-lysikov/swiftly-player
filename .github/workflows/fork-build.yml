@@ -1,13 +1,13 @@
-# Builds and tests any branch of this fork on the platforms that cannot be built
-# on a Mac: Linux, Windows and Android, plus the JellyfinKit tests. Apple platforms
-# are checked by hand in Xcode.
+# Builds and tests any branch of this fork: Linux, Windows, Android and the Mac app,
+# plus the JellyfinKit tests. iPhone, iPad and Apple TV are checked by hand in Xcode.
 #
 # **Fork only.** This file lives on the fork's `main` and is not part of any pull
 # request to the upstream project. It is started by hand (Actions → Fork build →
 # Run workflow) with the branch to build; the branch itself does not need this file.
 #
 # **Nothing is signed or published.** Every result is uploaded as an artifact of
-# the run: test results, a Linux tarball, a Windows folder, an Android debug APK.
+# the run: test results, a Linux tarball, a Windows folder, an Android debug APK, an
+# unsigned Mac app.
 #
 # The upstream build scripts carry paths from the maintainer's machines
 # (`C:\Werkzeuge`, `C:\Swift`, `~/Library/...`). The jobs below recreate those paths
@@ -32,6 +32,10 @@ on:
         default: true
       android:
         description: Android
+        type: boolean
+        default: true
+      macos:
+        description: macOS
         type: boolean
         default: true
 
@@ -269,3 +273,72 @@ jobs:
           name: android-unit-tests
           path: Android/phone/build/reports/tests/
           if-no-files-found: warn
+
+  macos:
+    name: macOS — build
+    if: inputs.macos
+    # The project needs Xcode 26 or newer; macos-15 images ship older ones.
+    runs-on: macos-26
+    env:
+      VLCKIT_URL: https://download.videolan.org/cocoapods/unstable/VLCKit-4.0-20260805-1123.zip
+      VLCKIT_SHA: c0c3ae1665053db5898581efc8ee920f526643526297f7fc643599532dc2ccf5
+    steps:
+      - uses: actions/checkout@v5
+        with: { ref: "${{ inputs.ref }}" }
+
+      - name: Newest Xcode
+        run: |
+          xcode=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+
+      # VLCKit is 2 GB unpacked and not in the repository (Werkzeuge/vlckit-fetch.sh). The
+      # archive is cached by its checksum so later runs skip the download.
+      - name: VLCKit archive (cached)
+        id: vlckit
+        uses: actions/cache@v4
+        with:
+          path: ~/vlckit.zip
+          key: vlckit-${{ env.VLCKIT_SHA }}
+
+      - name: VLCKit download
+        if: steps.vlckit.outputs.cache-hit != 'true'
+        run: curl -fsSL --retry 5 -o ~/vlckit.zip "$VLCKIT_URL"
+
+      # project.yml links the maintainer's patched build (`VLCKit-gepatcht`); the official
+      # one stands in for it, as on a contributor's machine.
+      - name: VLCKit into Vendor
+        run: |
+          echo "$VLCKIT_SHA  $HOME/vlckit.zip" | shasum -a 256 -c -
+          unzip -q ~/vlckit.zip -d "$RUNNER_TEMP/vlckit"
+          mkdir -p Vendor
+          mv "$RUNNER_TEMP/vlckit/VLCKit.xcframework" Vendor/
+          ln -sfn VLCKit.xcframework Vendor/VLCKit-gepatcht.xcframework
+
+      - name: Project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build (unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild -project Swiftly.xcodeproj -scheme Swiftly-macOS -configuration Release \
+            -destination 'generic/platform=macOS' -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO build 2>&1 | tee "$RUNNER_TEMP/build.log" | grep -E "error:|warning: .*\.swift|BUILD" || true
+          grep -q "BUILD SUCCEEDED" "$RUNNER_TEMP/build.log"
+
+      - name: Build log
+        if: failure()
+        run: grep -E "error:" "$RUNNER_TEMP/build.log" | sort -u | head -40 || true
+
+      - name: Pack
+        run: |
+          app=$(ls -d "$RUNNER_TEMP"/dd/Build/Products/Release/*.app | head -1)
+          ditto -c -k --keepParent "$app" Swiftly-macOS.zip
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: swiftly-macos-unsigned
+          path: Swiftly-macOS.zip
+          if-no-files-found: error
