@@ -6,8 +6,8 @@
 # Run workflow) with the branch to build; the branch itself does not need this file.
 #
 # **Nothing is signed or published.** Every result is uploaded as an artifact of
-# the run: test results, a Linux tarball, a Windows folder, an Android debug APK, an
-# unsigned Mac app.
+# the run: test results, a Linux tarball, a portable Windows folder (unzip, run
+# Swiftly.exe), an Android debug APK, an unsigned Mac app.
 #
 # The upstream build scripts carry paths from the maintainer's machines
 # (`C:\Werkzeuge`, `C:\Swift`, `~/Library/...`). The jobs below recreate those paths
@@ -61,7 +61,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: jellyfinkit-tests
           path: test-results*.xml
@@ -103,7 +103,7 @@ jobs:
           cp -R "$BUILD_DIR"/*.resources out/swiftly-linux/ 2>/dev/null || true
           tar -C out -czf swiftly-linux-x86_64.tar.gz swiftly-linux
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: swiftly-linux-x86_64
           path: swiftly-linux-x86_64.tar.gz
@@ -177,18 +177,22 @@ jobs:
           if (Test-Path Windows\bau.log) { Get-Content Windows\bau.log -Tail 200 }
           if (Test-Path C:\Werkzeuge\rlottie.log) { Get-Content C:\Werkzeuge\rlottie.log -Tail 50 }
 
-      - uses: actions/upload-artifact@v5
+      # **A folder that runs on any Windows**, as the installer lays it out
+      # (`Windows/Install/package.ps1`): build.ps1 alone leaves GTK, libVLC and the Swift
+      # runtime in the build machine's tool folders and starts through a script pointing
+      # there, which nowhere else has.
+      - name: Portable folder
+        run: |
+          .\Windows\Install\package.ps1 -Konfiguration release `
+            -Gtk C:\Werkzeuge\gtk4 `
+            -VlcLaufzeit "C:\Werkzeuge\vlc\vlc-$env:VLC_VERSION" `
+            -SwiftLaufzeit "C:\Swift\Runtimes\$env:SWIFT_VERSION\usr\bin"
+          Compress-Archive -Path Windows\Output\Swiftly -DestinationPath Swiftly-Windows-portable.zip
+
+      - uses: actions/upload-artifact@v6
         with:
-          name: swiftly-windows-x64
-          path: |
-            Windows/.build/release/*.exe
-            Windows/.build/release/*.dll
-            Windows/.build/release/*.resources/**
-            Windows/.build/release/lib/**
-            Windows/.build/release/share/**
-            Windows/.build/release/plugins/**
-            Windows/.build/release/Lizenzen/**
-            Windows/.build/launcher/Swiftly.exe
+          name: swiftly-windows-x64-portable
+          path: Swiftly-Windows-portable.zip
           if-no-files-found: error
 
   android:
@@ -260,7 +264,7 @@ jobs:
         run: ./gradlew :phone:testDirectDebugUnitTest --no-daemon
 
       - name: Upload APK
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: swiftly-android-direct-debug
           path: Android/phone/build/outputs/apk/direct/debug/*.apk
@@ -268,7 +272,7 @@ jobs:
 
       - name: Upload unit test reports
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: android-unit-tests
           path: Android/phone/build/reports/tests/
@@ -337,7 +341,7 @@ jobs:
           app=$(ls -d "$RUNNER_TEMP"/dd/Build/Products/Release/*.app | head -1)
           ditto -c -k --keepParent "$app" Swiftly-macOS.zip
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v6
         with:
           name: swiftly-macos-unsigned
           path: Swiftly-macOS.zip
