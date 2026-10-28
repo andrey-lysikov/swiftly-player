@@ -4,8 +4,14 @@
 # **Every platform is built by its own standard tool.** The workflow only
 # installs what a developer installs once and then runs the same command as on
 # a desk: `xcodebuild` for iOS, tvOS and macOS, `Linux/build.sh`,
-# `Windows/build.ps1`, Gradle for Android. No step patches a file of the
-# checkout; a build that works here works the same way locally.
+# `Windows/build.ps1`, Gradle for Android. Nothing is patched by hand; a build
+# that works here works the same way locally.
+#
+# **Any branch builds with this commit's build scripts.** A branch for an
+# upstream pull request starts from the maintainer's tree, whose scripts carry
+# the paths of his machines (`C:\Werkzeuge`, a fixed Visual Studio, the NDK under
+# `~/Library`). The jobs put this workflow's versions of those few files in place
+# before building; the app's own code is the branch's.
 #
 # **Signing is optional and comes from repository secrets only.** Certificates
 # and keys are never typed into the run form: inputs are stored with the run and
@@ -233,6 +239,20 @@ jobs:
 
       - uses: actions/checkout@v5
         with: { ref: "${{ env.REF }}" }
+      # **The build scripts of this workflow's own commit**, over those of the branch.
+      # A branch for an upstream pull request carries the upstream scripts with the
+      # maintainer's fixed paths; only the scripts are swapped, not a line of the app.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-scripts
+          sparse-checkout: |
+            Linux/build.sh
+          sparse-checkout-cone-mode: false
+      - name: Build scripts
+        run: |
+          for f in Linux/build.sh; do cp ".ci-scripts/$f" "$f"; done
+          rm -rf .ci-scripts
 
       # Installs into ~/.local, where `Linux/environment.sh` looks for it.
       - name: rlottie
@@ -294,6 +314,23 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with: { ref: "${{ env.REF }}" }
+      # **The build scripts of this workflow's own commit**, over those of the branch.
+      # A branch for an upstream pull request carries the upstream scripts with the
+      # maintainer's fixed paths; only the scripts are swapped, not a line of the app.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-scripts
+          sparse-checkout: |
+            Windows/environment.ps1
+            Windows/build.ps1
+            Windows/Install/package.ps1
+            Werkzeuge/rlottie-build.ps1
+          sparse-checkout-cone-mode: false
+      - name: Build scripts
+        run: |
+          foreach ($f in @('Windows/environment.ps1', 'Windows/build.ps1', 'Windows/Install/package.ps1', 'Werkzeuge/rlottie-build.ps1')) { Copy-Item ".ci-scripts\$f" $f -Force }
+          Remove-Item -Recurse -Force .ci-scripts
 
       # `Windows/environment.ps1` finds Visual Studio itself (vswhere) and Swift
       # through SWIFT_ROOT, set here to wherever the installer put it.
@@ -386,6 +423,21 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with: { ref: "${{ env.REF }}" }
+      # **The build scripts of this workflow's own commit**, over those of the branch.
+      # A branch for an upstream pull request carries the upstream scripts with the
+      # maintainer's fixed paths; only the scripts are swapped, not a line of the app.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-scripts
+          sparse-checkout: |
+            Android/core/build.gradle
+            Android/phone/build.gradle.kts
+          sparse-checkout-cone-mode: false
+      - name: Build scripts
+        run: |
+          for f in Android/core/build.gradle Android/phone/build.gradle.kts; do cp ".ci-scripts/$f" "$f"; done
+          rm -rf .ci-scripts
 
       - name: JDK 25 (swiftkit-core) and JDK 21 (app)
         uses: actions/setup-java@v5
