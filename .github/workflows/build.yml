@@ -245,9 +245,17 @@ jobs:
         working-directory: Linux
         run: |
           bin=$(swift build -c release -Xswiftc -static-stdlib --show-bin-path)
-          mkdir -p "$RUNNER_TEMP/swiftly-linux"
-          cp "$bin/SwiftlyLinux" "$RUNNER_TEMP/swiftly-linux/"
-          cp -R "$bin"/*.resources "$RUNNER_TEMP/swiftly-linux/" 2>/dev/null || true
+          # **`Resources` next to the binary**, where `Platform.bundled` looks:
+          # start animation, font, icons and the licence texts `build.sh` copied
+          # in. Without it the app starts without any of them. The desktop entry
+          # and metainfo go along for whoever installs the folder by hand.
+          out="$RUNNER_TEMP/swiftly-linux"
+          mkdir -p "$out"
+          cp "$bin/SwiftlyLinux" "$out/"
+          cp -R "$bin"/*.resources "$out/" 2>/dev/null || true
+          cp -R Resources "$out/Resources"
+          cp Install/de.paulherter.swiftly.desktop Install/de.paulherter.swiftly.metainfo.xml "$out/"
+          cp ../LICENSE ../THIRD-PARTY-NOTICES.md "$out/"
           mkdir -p "$GITHUB_WORKSPACE/out"
           tar -C "$RUNNER_TEMP" -czf "$GITHUB_WORKSPACE/out/swiftly-linux-x86_64.tar.gz" swiftly-linux
 
