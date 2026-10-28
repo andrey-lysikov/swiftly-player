@@ -8,10 +8,33 @@
 # Dot-source it:  . .\environment.ps1
 
 param(
-    [string]$SwiftWurzel = "$env:LOCALAPPDATA\Programs\Swift",
-    [string]$SwiftFassung = '6.3.3',
-    [string]$BuildTools = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools'
+    [string]$SwiftWurzel = $env:SWIFT_ROOT,
+    [string]$SwiftFassung = $env:SWIFT_VERSION,
+    [string]$BuildTools = $env:VSINSTALLDIR
 )
+
+# **Found, not assumed.** Paths and versions differ from machine to machine:
+# Build Tools or a full Visual Studio, 2022 or newer, Swift installed for the
+# user or for the machine. A fixed path works on one computer and fails
+# everywhere else with "vcvars64.bat fehlt". Parameters and the variables above
+# still win; the search only fills what is left empty.
+if (-not $BuildTools) {
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (Test-Path $vswhere) {
+        $BuildTools = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+    }
+}
+if (-not $SwiftWurzel) {
+    $SwiftWurzel = @("$env:LOCALAPPDATA\Programs\Swift", "$env:ProgramFiles\Swift", 'C:\Swift') |
+        Where-Object { Test-Path (Join-Path $_ 'Toolchains') } | Select-Object -First 1
+}
+if (-not $SwiftWurzel) { throw 'Swift fehlt: weder SWIFT_ROOT noch eine Installation unter Programs\Swift' }
+# The newest installed toolchain; its folder is called `<version>+Asserts`.
+if (-not $SwiftFassung) {
+    $SwiftFassung = Get-ChildItem (Join-Path $SwiftWurzel 'Toolchains') -Directory |
+        ForEach-Object { $_.Name -replace '\+.*$', '' } |
+        Sort-Object { [version]$_ } -Descending | Select-Object -First 1
+}
 
 $vcvars = Join-Path $BuildTools 'VC\Auxiliary\Build\vcvars64.bat'
 if (-not (Test-Path $vcvars)) { throw "vcvars64.bat fehlt: $vcvars" }
@@ -32,3 +55,5 @@ if (-not (Test-Path $toolchain)) { throw "Swift fehlt: $toolchain" }
 
 $env:SDKROOT = $sdk
 $env:Path = "$toolchain;$laufzeit;" + $env:Path
+# For `build.ps1` and `Install\package.ps1`: the runtime DLLs that ship with the app.
+$env:SWIFTLY_SWIFT_RUNTIME = $laufzeit

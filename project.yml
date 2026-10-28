@@ -761,3 +761,32 @@ targets:
         # otherwise it looks larger than its neighbors in the Dock. iOS is the
         # opposite, hence a separate asset.
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
+# **Shared schemes are declared here, not left to Xcode.** Without them
+# `xcodegen generate` writes none: Xcode then invents private ones per user, and
+# `xcodebuild -scheme` on a fresh checkout or a CI runner finds nothing to build.
+schemes:
+  Swiftly-iOS:
+    build:
+      targets:
+        Swiftly-iOS: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  Swiftly-tvOS:
+    build:
+      targets:
+        Swiftly-tvOS: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  Swiftly-macOS:
+    build:
+      targets:
+        Swiftly-macOS: all
+    run:
+      config: Debug
+    archive:
+      config: Release

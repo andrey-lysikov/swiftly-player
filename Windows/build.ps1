@@ -15,7 +15,8 @@ param(
     [string]$Gtk = 'C:\Werkzeuge\gtk4',
     [string]$Vlc = 'C:\Werkzeuge\vlcsdk',
     [string]$VlcLaufzeit = 'C:\Werkzeuge\vlc\vlc-3.0.21',
-    [string]$SwiftLaufzeit = "$env:LOCALAPPDATA\Programs\Swift\Runtimes\6.3.3\usr\bin",
+    # Empty: the runtime of the toolchain `environment.ps1` finds.
+    [string]$SwiftLaufzeit = '',
     [string]$Rlottie = 'C:\Werkzeuge\rlottie',
     # **Symbols for looking up crashes.** Without them no PDB is produced, and an
     # offset from the event log cannot be resolved to a function name. That is
@@ -27,6 +28,7 @@ $ErrorActionPreference = 'Stop'
 $hier = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 . (Join-Path $hier 'environment.ps1')
+if (-not $SwiftLaufzeit) { $SwiftLaufzeit = $env:SWIFTLY_SWIFT_RUNTIME }
 $quelle = Join-Path (Split-Path -Parent $hier) 'Linux\Sources\SwiftlyLinux'
 $ziel = Join-Path $hier 'Sources\SwiftlyWindows'
 

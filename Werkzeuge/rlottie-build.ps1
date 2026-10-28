@@ -4,13 +4,22 @@
 # **No threads, for the same reason as on Linux.** With LOTTIE_THREAD_SUPPORT
 # rlottie creates a thread pool that keeps spinning idle forever. For a mark
 # of 360 points that plays once at startup, one thread is enough.
+#
+#     .\Werkzeuge\rlottie-build.ps1 [-Ziel C:\Werkzeuge\rlottie] [-Quelle ...]
+#
+# `-Ziel` is what `Windows\build.ps1 -Rlottie` expects.
+param(
+    [string]$Ziel = 'C:\Werkzeuge\rlottie',
+    [string]$Quelle = ''
+)
 $ErrorActionPreference = 'Continue'
-$log = 'C:\Werkzeuge\rlottie.log'
+# PowerShell names are case-insensitive: `$quelle` and `$ziel` below are these parameters.
+if (-not $Quelle) { $Quelle = "$Ziel-quelle" }
+New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Ziel) | Out-Null
+$log = "$Ziel.log"
 function Sag($t) { "$(Get-Date -Format HH:mm:ss)  $t" | Tee-Object -FilePath $log -Append }
 
-$quelle = 'C:\Werkzeuge\rlottie-quelle'
-$ziel = 'C:\Werkzeuge\rlottie'
-$env:Path = 'C:\Program Files\Git\cmd;' + $env:Path
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) { $env:Path = 'C:\Program Files\Git\cmd;' + $env:Path }
 
 if (-not (Test-Path $quelle)) {
     Sag 'rlottie holen'
@@ -53,3 +62,4 @@ Sag "Archiv mit $LASTEXITCODE"
 Pop-Location
 Copy-Item "$quelle\inc\rlottie_capi.h","$quelle\inc\rlottiecommon.h" "$ziel\include" -Force
 Sag ('rlottie.lib: ' + (Test-Path "$ziel\lib\rlottie.lib"))
+if (-not (Test-Path "$ziel\lib\rlottie.lib")) { throw "rlottie.lib fehlt, siehe $log" }

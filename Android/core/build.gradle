@@ -21,9 +21,25 @@ dependencies {
     implementation(libs.swiftkit.core)
 }
 
-def swiftlyPfad = "${System.getProperty('user.home')}/.swiftly/bin/swiftly"
+// **Paths from the environment first, then where the tools install themselves.** A fixed home
+// path works on one machine; on a CI runner or a Linux box the build failed with a missing NDK
+// or SDK. The variables are the ones the tools set on their own (`ANDROID_NDK_HOME`,
+// `SWIFTLY_HOME_DIR`); only the Swift SDK folder and the macOS SDK need ours.
+def heim = System.getProperty('user.home')
+def umgebung = { String name -> System.getenv(name)?.trim() ?: null }
+def swiftlyPfad = "${umgebung('SWIFTLY_HOME_DIR') ?: "${heim}/.swiftly"}/bin/swiftly"
 def swiftFassung = "6.3.3"
-def sdkBuendel = "${System.getProperty('user.home')}/Library/org.swift.swiftpm/swift-sdks/swift-${swiftFassung}-RELEASE_android.artifactbundle"
+// SwiftPM keeps installed SDKs under ~/Library on macOS and under ~/.swiftpm elsewhere.
+def sdkOrdner = umgebung('SWIFT_SDKS_DIR') ?:
+    [ "${heim}/Library/org.swift.swiftpm/swift-sdks", "${heim}/.swiftpm/swift-sdks" ].find { new File(it).isDirectory() } ?:
+    "${heim}/Library/org.swift.swiftpm/swift-sdks"
+def sdkBuendel = "${sdkOrdner}/swift-${swiftFassung}-RELEASE_android.artifactbundle"
+def ndkFassung = "27.3.13750724"
+def ndkPfad = umgebung('ANDROID_NDK_HOME') ?: "${umgebung('ANDROID_HOME') ?: "${heim}/Library/Android/sdk"}/ndk/${ndkFassung}"
+// See the pin below: an override, then the pinned 26.5 if this machine has it, otherwise the
+// default SDK (Linux has none and needs none).
+def macSdk = umgebung('SWIFTLY_MACOS_SDK') ?:
+    [ "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk" ].find { new File(it).isDirectory() }
 
 // FoundationNetworking is required. The example lacks it because it needs no network;
 // JellyfinKit loads over URLSession, and without the library loading libSwiftlyCore.so fails
@@ -59,12 +75,12 @@ abis.each { abi, info ->
         workingDir = swiftOrdner
         executable(swiftlyPfad)
         args("run", "swift", "build", "+${swiftFassung}", "--swift-sdk", info.triple, "--build-system", "native")
-        environment("ANDROID_NDK_HOME", "${System.getProperty('user.home')}/Library/Android/sdk/ndk/27.3.13750724")
+        environment("ANDROID_NDK_HOME", ndkPfad)
         // Pin the macOS SDK to 26.5. After the CommandLineTools silently updated to macOS 27,
         // `MacOSX.sdk` pointed to 27.0, whose libSystem.B.tbd names the architecture `arm64e.x1`.
         // The Swift 6.3.3 linker does not know it, and even the package manifest could not be
         // linked. Remove with a newer Swift.
-        environment("SDKROOT", "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk")
+        if (macSdk) environment("SDKROOT", macSdk)
     }
     swiftBauen.configure { dependsOn(t) }
 }

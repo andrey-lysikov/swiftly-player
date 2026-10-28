@@ -3,6 +3,7 @@
 #
 #     ./Linux/build.sh            build
 #     ./Linux/build.sh --starten  build and run
+#     CONFIGURATION=release ./Linux/build.sh   the build that ships
 #
 # **The build sets up its own environment.** It used to depend on variables
 # nobody set and on sonames that a system update can rename; see `environment.sh`.
@@ -30,9 +31,14 @@ rm -rf "${here}/Resources/Licenses"
 mkdir -p "${here}/Resources/Licenses"
 cp "${here}/../LICENSES/"* "${here}/Resources/Licenses/" || { echo "LICENSES/ fehlt"; exit 1; }
 configuration="${CONFIGURATION:-debug}"
-swift build -c "$configuration" || exit 1
+# **A release build carries the Swift runtime inside.** Without it the binary
+# starts only where the same Swift toolchain is installed; with it, on any
+# distribution that has GTK and libVLC. The packages are built the same way.
+flags=()
+[ "$configuration" = release ] && flags=(-Xswiftc -static-stdlib)
+swift build -c "$configuration" "${flags[@]}" || exit 1
 
-binaer="${here}/.build/${configuration}/SwiftlyLinux"
+binaer="$(swift build -c "$configuration" "${flags[@]}" --show-bin-path)/SwiftlyLinux"
 
 # -- Bundle private libraries ----------------------------------------------
 #
