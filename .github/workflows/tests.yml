@@ -1,0 +1,159 @@
+# Tests and static checks, on every push and pull request.
+#
+# **Fast and without secrets.** Nothing is built for a device here: that is the
+# build workflow (`build.yml`), started by hand. What runs here takes a few
+# minutes on Linux and catches most problems before anyone waits for Xcode:
+# the package tests, and the checks that no build notices because the result
+# still compiles (a missing translation, a renamed Codable key, a stale licence
+# list).
+
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # Two pushes in a row want the result of the second.
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: JellyfinKit
+    runs-on: ubuntu-24.04
+    container: swift:6.1-noble
+    steps:
+      - uses: actions/checkout@v5
+
+      # **The cache saves half the runtime.** Without it every run downloads the
+      # dependencies again.
+      - name: Cache
+        uses: actions/cache@v4
+        with:
+          path: Packages/JellyfinKit/.build
+          key: jellyfinkit-${{ runner.os }}-${{ hashFiles('Packages/JellyfinKit/Package.resolved') }}
+          restore-keys: jellyfinkit-${{ runner.os }}-
+
+      # **A second run before a red mark.** Shared runners are slow at random, and
+      # the timing tests of the report queue fail there now and then; a real bug
+      # fails twice.
+      - name: swift test
+        working-directory: Packages/JellyfinKit
+        run: |
+          swift test --parallel --xunit-output "$GITHUB_WORKSPACE/test-results.xml" \
+            || swift test --xunit-output "$GITHUB_WORKSPACE/test-results.xml"
+
+      - name: Test results
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: jellyfinkit-tests
+          path: test-results*.xml
+          if-no-files-found: warn
+
+  checks:
+    name: Static checks
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # The repository is public: nothing that issues supporter keys or talks to
+      # the shop may ever land in it (public verification key only).
+      - name: Secrets
+        run: |
+          if git grep -n -I -E "sk_live|rk_live|whsec_|BEGIN ([A-Z]+ )?PRIVATE KEY|KASSE_SS2_SEED" -- . ':!.github/workflows/tests.yml'; then
+            echo "::error::Secret in the repository"; exit 1
+          fi
+
+      # JellyfinKit is tested on Linux, where Apple-only modules do not exist.
+      # Every such import must sit under `#if canImport(...)` on the first line.
+      - name: Apple imports in JellyfinKit
+        run: |
+          status=0
+          for file in $(grep -rlE "^import (StoreKit|StoreKitTest|UIKit|AppKit|SwiftUI|AVKit)$" Packages/JellyfinKit/Sources Packages/JellyfinKit/Tests || true); do
+            head -1 "$file" | grep -q "^#if" || { echo "::error file=$file::unguarded Apple import"; status=1; }
+          done
+          exit $status
+
+      - name: String catalog
+        run: python3 Werkzeuge/catalog-check.py
+
+      # A renamed property renames its JSON key, a renamed enum case its raw
+      # value. Builds and tests stay green while devices lose their stored data.
+      - name: Codable keys
+        run: python3 Werkzeuge/codable-keys-check.py
+
+      - name: Licences
+        run: python3 Werkzeuge/licenses-generate.py --pruefen
+
+      - name: Sheets
+        run: python3 Werkzeuge/sheet-guard.py
+
+      # **Android reads the same catalog**, through tables generated from it. A
+      # key missing there shows as German text on an English device; no build
+      # fails because of it.
+      - name: Android texts
+        run: |
+          python3 Werkzeuge/texts-to-android.py "$RUNNER_TEMP/texts" >/dev/null
+          diff -r "$RUNNER_TEMP/texts" Android/shared/src/main/assets/texts \
+            || { echo "::error::Android texts are stale: python3 Werkzeuge/texts-to-android.py"; exit 1; }
+          absent=$(grep -rhoE 'uebersetzt\("[^"]+"' Android/phone/src/main/java Android/shared/src/main/java \
+            | sed 's/uebersetzt("//; s/"$//' | sort -u \
+            | while IFS= read -r k; do
+                # Kotlin writes %d/%s, the catalog %lld/%@. Both spellings count.
+                swift=$(printf '%s' "$k" | sed -E 's/%([0-9]+\$)?d/%\1lld/g; s/%([0-9]+\$)?s/%\1@/g')
+                grep -qF "\"$k\"" Sources/Shared/Localizable.xcstrings \
+                  || grep -qF "\"$swift\"" Sources/Shared/Localizable.xcstrings \
+                  || printf '%s\n' "$k"
+              done)
+          if [ -n "$absent" ]; then
+            echo "::error::Android keys missing from the catalog"; printf '  %s\n' "$absent"; exit 1
+          fi
+
+      # **The Linux version has no Info.plist**, so its numbers are typed twice:
+      # in `Version.swift` and in `project.yml`.
+      - name: Version numbers
+        run: |
+          marketing=$(grep -m1 -oE 'MARKETING_VERSION: "[^"]+"' project.yml | cut -d'"' -f2)
+          build=$(grep -m1 -oE 'CURRENT_PROJECT_VERSION: "[^"]+"' project.yml | cut -d'"' -f2)
+          grep -q "static let number = \"$marketing\"" Linux/Sources/SwiftlyLinux/Version.swift \
+            && grep -q "static let build = \"$build\"" Linux/Sources/SwiftlyLinux/Version.swift \
+            || { echo "::error::Version.swift differs from project.yml ($marketing, build $build)"; exit 1; }
+
+  apple-project:
+    name: Xcode project
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      # **No build here** (VLCKit is 861 MB; that is the build workflow). What is
+      # checked is the class of error that breaks an unrelated target "for no
+      # reason": whether `project.yml` resolves, whether all three schemes exist,
+      # and whether every source file a target lists is there.
+      - name: Generate
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Schemes
+        run: |
+          set -euo pipefail
+          for scheme in Swiftly-iOS Swiftly-tvOS Swiftly-macOS; do
+            test -f "Swiftly.xcodeproj/xcshareddata/xcschemes/$scheme.xcscheme" \
+              || { echo "::error::scheme missing: $scheme"; exit 1; }
+          done
+
+      - name: Source files
+        run: |
+          set -euo pipefail
+          missing=0
+          while read -r path; do
+            [ -e "$path" ] || { echo "::error::missing: $path"; missing=1; }
+          done < <(grep -oE '^[[:space:]]+- (path: )?[A-Za-z0-9_/.-]+\.swift' project.yml \
+                   | sed -E 's/^[[:space:]]+- (path: )?//' | sort -u)
+          exit $missing
