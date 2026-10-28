@@ -33,7 +33,7 @@ jobs:
       # **The cache saves half the runtime.** Without it every run downloads the
       # dependencies again.
       - name: Cache
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: Packages/JellyfinKit/.build
           key: jellyfinkit-${{ runner.os }}-${{ hashFiles('Packages/JellyfinKit/Package.resolved') }}
