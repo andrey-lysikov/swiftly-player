@@ -10,8 +10,9 @@
 # **Any branch builds with this commit's build scripts.** A branch for an
 # upstream pull request starts from the maintainer's tree, whose scripts carry
 # the paths of his machines (`C:\Werkzeuge`, a fixed Visual Studio, the NDK under
-# `~/Library`). The jobs put this workflow's versions of those few files in place
-# before building; the app's own code is the branch's.
+# `~/Library`, no link for the patched VLCKit). The jobs put this workflow's
+# versions of those few files in place before building; the app's own code is
+# the branch's.
 #
 # **Signing is optional and comes from repository secrets only.** Certificates
 # and keys are never typed into the run form: inputs are stored with the run and
@@ -128,6 +129,21 @@ jobs:
         with:
           path: ~/vlckit
           key: vlckit-${{ hashFiles('Werkzeuge/vlckit-fetch.sh') }}
+
+      # The branch's own fetch script may predate the link to the patched name
+      # that `project.yml` expects; see "Any branch builds with this commit's build
+      # scripts" at the top.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .ci-scripts
+          sparse-checkout: |
+            Werkzeuge/vlckit-fetch.sh
+          sparse-checkout-cone-mode: false
+      - name: Build scripts
+        run: |
+          cp .ci-scripts/Werkzeuge/vlckit-fetch.sh Werkzeuge/vlckit-fetch.sh
+          rm -rf .ci-scripts
 
       - name: VLCKit
         run: VLCKIT_ZIP="$HOME/vlckit/vlckit.zip" Werkzeuge/vlckit-fetch.sh
