@@ -9,8 +9,8 @@ import Foundation
 /// **On Apple it comes from the bundle** (`CFBundleShortVersionString` and
 /// `CFBundleVersion`); Linux has no Info.plist, so it is defined here. The two
 /// numbers therefore live in exactly **two** places: here and in
-/// `Linux/Install/PKGBUILD` (`pkgver`), which the build touches anyway.
-/// Whoever changes one changes the other.
+/// `project.yml` (`MARKETING_VERSION`, `CURRENT_PROJECT_VERSION`). Whoever
+/// changes one changes the other; the test workflow compares them.
 enum Version {
     static let number = "1.0.9"
     /// **The build number counts when the same version is released again.**

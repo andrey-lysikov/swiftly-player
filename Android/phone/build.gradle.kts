@@ -8,12 +8,24 @@ plugins {
 // **Signing for the Play Store.** The key lives outside all repos (`~/.swiftly-android/swiftly-upload.jks`),
 // the password **in the macOS keychain** (entry `swiftly-android-signatur`), never in a file or the
 // repo. The keychain is queried only for release builds; debug builds never need either.
-val uploadKey = file(System.getProperty("user.home") + "/.swiftly-android/swiftly-upload.jks")
+//
+// **A build machine without that keychain passes the key in the environment** (CI secrets):
+// `SWIFTLY_ANDROID_KEYSTORE` (path), `SWIFTLY_ANDROID_KEYSTORE_PASSWORD`, and optionally
+// `SWIFTLY_ANDROID_KEY_ALIAS` / `SWIFTLY_ANDROID_KEY_PASSWORD` when they differ from the defaults.
+// The variables win; without them nothing changes.
 val releaseBuild = gradle.startParameter.taskNames.any { it.contains("Release", ignoreCase = true) }
-val signingPassword: String? = if (releaseBuild && uploadKey.exists()) runCatching {
-    providers.exec { commandLine("security", "find-generic-password", "-s", "swiftly-android-signatur", "-w") }
-        .standardOutput.asText.get().trim().ifEmpty { null }
-}.getOrNull() else null
+val keyFromEnvironment = System.getenv("SWIFTLY_ANDROID_KEYSTORE")?.takeIf { it.isNotBlank() }
+val uploadKey = file(keyFromEnvironment ?: (System.getProperty("user.home") + "/.swiftly-android/swiftly-upload.jks"))
+val signingPassword: String? = when {
+    !releaseBuild || !uploadKey.exists() -> null
+    keyFromEnvironment != null -> System.getenv("SWIFTLY_ANDROID_KEYSTORE_PASSWORD")?.ifBlank { null }
+    else -> runCatching {
+        providers.exec { commandLine("security", "find-generic-password", "-s", "swiftly-android-signatur", "-w") }
+            .standardOutput.asText.get().trim().ifEmpty { null }
+    }.getOrNull()
+}
+val signingAlias = System.getenv("SWIFTLY_ANDROID_KEY_ALIAS")?.ifBlank { null } ?: "swiftly-upload"
+val signingKeyPassword = System.getenv("SWIFTLY_ANDROID_KEY_PASSWORD")?.ifBlank { null } ?: signingPassword
 
 android {
     namespace = "de.paulherter.swiftly"
@@ -21,8 +33,8 @@ android {
         if (signingPassword != null) create("play") {
             storeFile = uploadKey
             storePassword = signingPassword
-            keyAlias = "swiftly-upload"
-            keyPassword = signingPassword
+            keyAlias = signingAlias
+            keyPassword = signingKeyPassword
         }
     }
     buildTypes {
@@ -35,7 +47,7 @@ android {
     // same versionCode:
     // - `play`: Google Play and its Play-signed APK. Tips through Play Billing; no link to the
     //   website, no supporter key, and nothing of either in the binary.
-    // - `direct`: the APK on GitHub signed with the upload key (`Werkzeuge/sideload-apk.sh`). No
+    // - `direct`: the APK on GitHub signed with the upload key (the build workflow). No
     //   Billing library and no BILLING permission; "Support on the website" and the supporter key.
     // Flavor code lives in `src/play` and `src/direct`; `Werkzeuge/store-guard-android.py` proves
     // that the play build carries none of the direct-only strings.

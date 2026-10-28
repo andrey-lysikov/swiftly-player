@@ -17,13 +17,18 @@ param(
     [string]$Ziel = '',
     [string]$Gtk = 'C:\Werkzeuge\gtk4',
     [string]$VlcLaufzeit = 'C:\Werkzeuge\vlc\vlc-3.0.21',
-    [string]$SwiftLaufzeit = 'C:\Swift\Runtimes\6.2.1\usr\bin'
+    # Empty: the runtime of the toolchain `..\environment.ps1` finds, as in `build.ps1`.
+    [string]$SwiftLaufzeit = ''
 )
 
 $ErrorActionPreference = 'Stop'
 $hier = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 if (-not $Ziel) { $Ziel = Join-Path $hier 'Output\Swiftly' }
 function Sag($t) { Write-Host "==> $t" -ForegroundColor Green }
+if (-not $SwiftLaufzeit) {
+    . (Join-Path $hier 'environment.ps1')
+    $SwiftLaufzeit = $env:SWIFTLY_SWIFT_RUNTIME
+}
 
 $bau = Join-Path $hier ".build\$Konfiguration"
 # **On Windows SwiftPM does not always create the short path.** Then the result
@@ -121,8 +126,12 @@ Copy-Item "$VlcLaufzeit\plugins" "$Ziel\bin" -Recurse -Force
 # delayed ones) from `Swiftly.exe`, `bin\plugins` and `lib` stays. If `dumpbin`
 # is missing, everything stays.
 Sag 'Unbenutzte DLLs aussortieren'
-$dumpbin = Get-ChildItem 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\VC\Tools\MSVC' -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -like '*HostX64\x64*' } | Select-Object -First 1
+$vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+$vs = if (Test-Path $vswhere) { & $vswhere -latest -products * -property installationPath }
+$dumpbin = if ($vs) {
+    Get-ChildItem (Join-Path $vs 'VC\Tools\MSVC') -Recurse -Filter dumpbin.exe -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -like '*HostX64\x64*' } | Select-Object -First 1
+}
 if ($dumpbin) {
     $imBin = @{}
     Get-ChildItem "$Ziel\bin" -Filter *.dll | ForEach-Object { $imBin[$_.Name.ToLower()] = $_ }

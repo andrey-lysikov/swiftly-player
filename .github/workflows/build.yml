@@ -1,0 +1,483 @@
+# Builds the apps, one platform or all of them, started by hand
+# (Actions → Build → Run workflow).
+#
+# **Every platform is built by its own standard tool.** The workflow only
+# installs what a developer installs once and then runs the same command as on
+# a desk: `xcodebuild` for iOS, tvOS and macOS, `Linux/build.sh`,
+# `Windows/build.ps1`, Gradle for Android. No step patches a file of the
+# checkout; a build that works here works the same way locally.
+#
+# **Signing is optional and comes from repository secrets only.** Certificates
+# and keys are never typed into the run form: inputs are stored with the run and
+# shown in the UI and the event payload, while secrets are masked and never
+# reach pull requests from forks. Without secrets, or with "sign" off, every
+# result is unsigned (Android: a debug-signed APK). The secrets, all optional:
+#
+#   Apple    APPLE_CERTIFICATE_P12      base64 of the distribution certificate (.p12)
+#            APPLE_CERTIFICATE_PASSWORD its password
+#            APPLE_API_KEY_P8           base64 of an App Store Connect API key (.p8);
+#                                       Xcode fetches the profiles with it
+#            APPLE_API_KEY_ID, APPLE_API_ISSUER_ID
+#            variable APPLE_TEAM_ID     only if not the team in project.yml
+#   Android  ANDROID_KEYSTORE           base64 of the upload keystore (.jks)
+#            ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, ANDROID_KEY_PASSWORD
+#   Windows  WINDOWS_CERTIFICATE_PFX    base64 of the code signing certificate (.pfx)
+#            WINDOWS_CERTIFICATE_PASSWORD
+#   Linux    LINUX_GPG_PRIVATE_KEY      armored private key; a detached .asc is written
+#            LINUX_GPG_PASSPHRASE
+#
+# Base64 of a file: `base64 -i key.p12 | pbcopy` (macOS), `base64 -w0 key.p12`
+# (Linux), `[Convert]::ToBase64String([IO.File]::ReadAllBytes('key.pfx'))`.
+
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Platform
+        type: choice
+        default: all
+        options: [all, macos, ios, tvos, linux, windows, android]
+      ref:
+        description: Branch, tag or commit (empty = the branch the run is started on)
+        required: false
+        default: ""
+      sign:
+        description: Sign with the keys from the repository secrets
+        type: boolean
+        default: false
+
+concurrency:
+  group: build-${{ inputs.ref || github.ref }}-${{ inputs.platform }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  REF: ${{ inputs.ref || github.ref }}
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-24.04
+    outputs:
+      apple: ${{ steps.plan.outputs.apple }}
+      linux: ${{ steps.plan.outputs.linux }}
+      windows: ${{ steps.plan.outputs.windows }}
+      android: ${{ steps.plan.outputs.android }}
+    steps:
+      # **One Apple job per platform, built from the choice.** A matrix cannot
+      # skip single entries by an input, so the list is computed here.
+      - id: plan
+        env:
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          apple='[]'
+          case "$PLATFORM" in
+            all) apple='["macos","ios","tvos"]' ;;
+            macos|ios|tvos) apple="[\"$PLATFORM\"]" ;;
+          esac
+          echo "apple=$apple" >> "$GITHUB_OUTPUT"
+          for p in linux windows android; do
+            [ "$PLATFORM" = all ] || [ "$PLATFORM" = "$p" ] && v=true || v=false
+            echo "$p=$v" >> "$GITHUB_OUTPUT"
+          done
+
+  apple:
+    name: ${{ matrix.platform }}
+    needs: plan
+    if: needs.plan.outputs.apple != '[]'
+    # The project needs Xcode 26 or newer; older images ship older ones.
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ fromJSON(needs.plan.outputs.apple) }}
+    steps:
+      - uses: actions/checkout@v5
+        with: { ref: "${{ env.REF }}" }
+
+      - name: Xcode
+        run: |
+          xcode=$(ls -d /Applications/Xcode_*.app | sort -V | tail -1)
+          sudo xcode-select -s "$xcode"
+          xcodebuild -version
+          brew install xcodegen
+
+      - name: Platform
+        id: platform
+        run: |
+          case "${{ matrix.platform }}" in
+            macos) echo "scheme=Swiftly-macOS" >> "$GITHUB_OUTPUT"; echo "destination=generic/platform=macOS" >> "$GITHUB_OUTPUT"; echo "export=macOS" >> "$GITHUB_OUTPUT" ;;
+            ios)   echo "scheme=Swiftly-iOS"   >> "$GITHUB_OUTPUT"; echo "destination=generic/platform=iOS"   >> "$GITHUB_OUTPUT"; echo "export=iOS"   >> "$GITHUB_OUTPUT" ;;
+            tvos)  echo "scheme=Swiftly-tvOS"  >> "$GITHUB_OUTPUT"; echo "destination=generic/platform=tvOS"  >> "$GITHUB_OUTPUT"; echo "export=tvOS"  >> "$GITHUB_OUTPUT" ;;
+          esac
+
+      # The archive is kept between runs, keyed by the fetch script that pins
+      # its URL and checksum; the script itself checks it again.
+      - name: VLCKit (cache)
+        uses: actions/cache@v4
+        with:
+          path: ~/vlckit
+          key: vlckit-${{ hashFiles('Werkzeuge/vlckit-fetch.sh') }}
+
+      - name: VLCKit
+        run: VLCKIT_ZIP="$HOME/vlckit/vlckit.zip" Werkzeuge/vlckit-fetch.sh
+
+      - name: Project
+        run: xcodegen generate
+
+      - name: Signing keys
+        id: keys
+        if: inputs.sign
+        env:
+          P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          P12_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          API_KEY: ${{ secrets.APPLE_API_KEY_P8 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          if [ -z "$P12" ] || [ -z "$API_KEY" ] || [ -z "$API_KEY_ID" ] || [ -z "$API_ISSUER" ]; then
+            echo "::warning::Apple secrets missing; building unsigned"
+            echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password=$(uuidgen)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" -P "$P12_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          rm "$RUNNER_TEMP/certificate.p12"
+          echo "$API_KEY" | base64 --decode > "$RUNNER_TEMP/api-key.p8"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+          echo "keychain=$keychain" >> "$GITHUB_OUTPUT"
+
+      - name: Build (unsigned)
+        if: steps.keys.outputs.ready != 'true'
+        run: |
+          set -o pipefail
+          xcodebuild -project Swiftly.xcodeproj -scheme "${{ steps.platform.outputs.scheme }}" \
+            -configuration Release -destination "${{ steps.platform.outputs.destination }}" \
+            -derivedDataPath "$RUNNER_TEMP/dd" CODE_SIGNING_ALLOWED=NO build \
+            | tee "$RUNNER_TEMP/build.log" | grep -E "error:|BUILD" || true
+          grep -q "BUILD SUCCEEDED" "$RUNNER_TEMP/build.log"
+          app=$(ls -d "$RUNNER_TEMP"/dd/Build/Products/Release*/*.app | head -1)
+          mkdir -p out
+          if [ "${{ matrix.platform }}" = macos ]; then
+            ditto -c -k --keepParent "$app" "out/Swiftly-macOS-unsigned.zip"
+          else
+            # The layout of an .ipa, so re-signing tools take it as one.
+            mkdir -p "$RUNNER_TEMP/Payload" && cp -R "$app" "$RUNNER_TEMP/Payload/"
+            (cd "$RUNNER_TEMP" && zip -qry "$GITHUB_WORKSPACE/out/Swiftly-${{ matrix.platform }}-unsigned.ipa" Payload)
+          fi
+
+      - name: Archive and export (signed)
+        if: steps.keys.outputs.ready == 'true'
+        env:
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER_ID }}
+          TEAM: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -o pipefail
+          auth=(-allowProvisioningUpdates
+                -authenticationKeyPath "$RUNNER_TEMP/api-key.p8"
+                -authenticationKeyID "$API_KEY_ID"
+                -authenticationKeyIssuerID "$API_ISSUER")
+          team=(); [ -n "$TEAM" ] && team=(DEVELOPMENT_TEAM="$TEAM")
+          options="Werkzeuge/Export/${{ steps.platform.outputs.export }}.plist"
+          if [ -n "$TEAM" ]; then
+            cp "$options" "$RUNNER_TEMP/export.plist"; options="$RUNNER_TEMP/export.plist"
+            /usr/libexec/PlistBuddy -c "Set :teamID $TEAM" "$options"
+          fi
+          xcodebuild -project Swiftly.xcodeproj -scheme "${{ steps.platform.outputs.scheme }}" \
+            -configuration Release -destination "${{ steps.platform.outputs.destination }}" \
+            -archivePath "$RUNNER_TEMP/Swiftly.xcarchive" "${auth[@]}" "${team[@]}" archive \
+            | tee "$RUNNER_TEMP/build.log" | grep -E "error:|ARCHIVE" || true
+          grep -q "ARCHIVE SUCCEEDED" "$RUNNER_TEMP/build.log"
+          xcodebuild -exportArchive -archivePath "$RUNNER_TEMP/Swiftly.xcarchive" \
+            -exportOptionsPlist "$options" -exportPath out "${auth[@]}"
+
+      - name: Build log
+        if: failure()
+        run: grep -E "error:" "$RUNNER_TEMP/build.log" | sort -u | head -40 || true
+
+      - name: Clean up keys
+        if: always() && steps.keys.outputs.ready == 'true'
+        run: |
+          security delete-keychain "${{ steps.keys.outputs.keychain }}" || true
+          rm -f "$RUNNER_TEMP/api-key.p8"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: swiftly-${{ matrix.platform }}
+          path: out/
+          if-no-files-found: error
+
+  linux:
+    name: linux
+    needs: plan
+    if: needs.plan.outputs.linux == 'true'
+    runs-on: ubuntu-24.04
+    container: swift:6.1-noble
+    steps:
+      - name: Tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            libgtk-4-dev libvlc-dev pkg-config g++ git ca-certificates gnupg
+
+      - uses: actions/checkout@v5
+        with: { ref: "${{ env.REF }}" }
+
+      # Installs into ~/.local, where `Linux/environment.sh` looks for it.
+      - name: rlottie
+        run: bash Werkzeuge/rlottie-build.sh
+
+      - name: Build
+        run: CONFIGURATION=release bash Linux/build.sh
+
+      - name: Pack
+        working-directory: Linux
+        run: |
+          bin=$(swift build -c release -Xswiftc -static-stdlib --show-bin-path)
+          # **`Resources` next to the binary**, where `Platform.bundled` looks:
+          # start animation, font, icons and the licence texts `build.sh` copied
+          # in. Without it the app starts without any of them. The desktop entry
+          # and metainfo go along for whoever installs the folder by hand.
+          out="$RUNNER_TEMP/swiftly-linux"
+          mkdir -p "$out"
+          cp "$bin/SwiftlyLinux" "$out/"
+          cp -R "$bin"/*.resources "$out/" 2>/dev/null || true
+          cp -R Resources "$out/Resources"
+          cp Install/de.paulherter.swiftly.desktop Install/de.paulherter.swiftly.metainfo.xml "$out/"
+          cp ../LICENSE ../THIRD-PARTY-NOTICES.md "$out/"
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          tar -C "$RUNNER_TEMP" -czf "$GITHUB_WORKSPACE/out/swiftly-linux-x86_64.tar.gz" swiftly-linux
+
+      - name: Sign
+        if: inputs.sign
+        env:
+          KEY: ${{ secrets.LINUX_GPG_PRIVATE_KEY }}
+          PASSPHRASE: ${{ secrets.LINUX_GPG_PASSPHRASE }}
+        run: |
+          if [ -z "$KEY" ]; then echo "::warning::LINUX_GPG_PRIVATE_KEY missing; not signed"; exit 0; fi
+          export GNUPGHOME="$RUNNER_TEMP/gnupg"; mkdir -m 700 -p "$GNUPGHOME"
+          echo "$KEY" | gpg --batch --import
+          gpg --batch --yes --pinentry-mode loopback --passphrase "$PASSPHRASE" \
+            --armor --detach-sign out/swiftly-linux-x86_64.tar.gz
+          rm -rf "$GNUPGHOME"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: swiftly-linux-x86_64
+          path: out/
+          if-no-files-found: error
+
+  windows:
+    name: windows
+    needs: plan
+    if: needs.plan.outputs.windows == 'true'
+    runs-on: windows-2022
+    env:
+      SWIFT_VERSION: "6.2.1"
+      VLC_VERSION: "3.0.21"
+      DEPS: ${{ github.workspace }}\..\deps
+      GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+        with: { ref: "${{ env.REF }}" }
+
+      # `Windows/environment.ps1` finds Visual Studio itself (vswhere) and Swift
+      # through SWIFT_ROOT, set here to wherever the installer put it.
+      - name: Swift
+        run: |
+          $url = "https://download.swift.org/swift-$env:SWIFT_VERSION-release/windows10/swift-$env:SWIFT_VERSION-RELEASE/swift-$env:SWIFT_VERSION-RELEASE-windows10.exe"
+          Invoke-WebRequest $url -OutFile swift.exe
+          Start-Process -Wait -FilePath .\swift.exe -ArgumentList '/quiet', '/norestart'
+          $toolchains = Get-ChildItem -Path "$env:LOCALAPPDATA\Programs", $env:ProgramFiles -Directory -Recurse -Filter Toolchains -ErrorAction SilentlyContinue |
+                          Select-Object -First 1
+          if (-not $toolchains) { throw 'Swift toolchain not found after installation' }
+          "SWIFT_ROOT=$($toolchains.Parent.FullName)" >> $env:GITHUB_ENV
+
+      - name: GTK 4 (gvsbuild)
+        run: |
+          $asset = gh release view --repo wingtk/gvsbuild --json assets --jq '.assets[].name' |
+                   Where-Object { $_ -match '^GTK4_Gvsbuild_.*_x64\.zip$' } | Select-Object -First 1
+          if (-not $asset) { throw 'No GTK4 x64 asset in the latest gvsbuild release' }
+          gh release download --repo wingtk/gvsbuild --pattern $asset --output gtk4.zip
+          Expand-Archive gtk4.zip -DestinationPath "$env:DEPS\gtk4"
+
+      - name: libVLC
+        run: |
+          Invoke-WebRequest "https://download.videolan.org/pub/videolan/vlc/$env:VLC_VERSION/win64/vlc-$env:VLC_VERSION-win64.7z" -OutFile vlc.7z
+          7z x vlc.7z "-o$env:DEPS\vlc" | Out-Null
+
+      - name: rlottie
+        run: .\Werkzeuge\rlottie-build.ps1 -Ziel "$env:DEPS\rlottie"
+
+      - name: Build
+        run: |
+          .\Windows\build.ps1 -Konfiguration release `
+            -Gtk "$env:DEPS\gtk4" `
+            -Vlc "$env:DEPS\vlc\vlc-$env:VLC_VERSION\sdk" `
+            -VlcLaufzeit "$env:DEPS\vlc\vlc-$env:VLC_VERSION" `
+            -Rlottie "$env:DEPS\rlottie"
+
+      # **A folder that runs on any Windows**, laid out as the installer lays it
+      # out: the build alone leaves GTK, libVLC and the Swift runtime in this
+      # machine's tool folders.
+      - name: Portable folder
+        run: |
+          .\Windows\Install\package.ps1 -Konfiguration release `
+            -Gtk "$env:DEPS\gtk4" `
+            -VlcLaufzeit "$env:DEPS\vlc\vlc-$env:VLC_VERSION"
+
+      - name: Sign
+        if: inputs.sign
+        env:
+          PFX: ${{ secrets.WINDOWS_CERTIFICATE_PFX }}
+          PFX_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          if (-not $env:PFX) { Write-Host '::warning::WINDOWS_CERTIFICATE_PFX missing; not signed'; exit 0 }
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX))
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Recurse -Filter signtool.exe |
+                      Where-Object { $_.FullName -like '*\x64\*' } | Sort-Object FullName -Descending | Select-Object -First 1
+          try {
+            & $signtool.FullName sign /f $pfx /p $env:PFX_PASSWORD /fd sha256 /tr http://timestamp.digicert.com /td sha256 `
+              Windows\Output\Swiftly\Swiftly.exe Windows\Output\Swiftly\bin\Swiftly.exe
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed ($LASTEXITCODE)" }
+          } finally { Remove-Item $pfx -Force }
+
+      - name: Pack
+        run: |
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Compress-Archive -Path Windows\Output\Swiftly -DestinationPath out\Swiftly-Windows-x64-portable.zip
+
+      - name: Build log
+        if: failure()
+        run: |
+          if (Test-Path Windows\bau.log) { Get-Content Windows\bau.log -Tail 200 }
+          if (Test-Path "$env:DEPS\rlottie.log") { Get-Content "$env:DEPS\rlottie.log" -Tail 50 }
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: swiftly-windows-x64
+          path: out/
+          if-no-files-found: error
+
+  android:
+    name: android
+    needs: plan
+    if: needs.plan.outputs.android == 'true'
+    runs-on: macos-15
+    env:
+      SWIFT_VERSION: "6.3.3"
+      SWIFT_JAVA_VERSION: "0.6.0"
+      NDK_VERSION: "27.3.13750724"
+    steps:
+      - uses: actions/checkout@v5
+        with: { ref: "${{ env.REF }}" }
+
+      - name: JDK 25 (swiftkit-core) and JDK 21 (app)
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: |
+            25
+            21
+
+      # `Android/core/build.gradle` reads the NDK from ANDROID_NDK_HOME and the
+      # macOS SDK from SWIFTLY_MACOS_SDK.
+      - name: Android NDK
+        run: |
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" > /dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          echo "SWIFTLY_MACOS_SDK=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+
+      - name: Swift and the Swift SDK for Android
+        run: |
+          curl -fsSL https://download.swift.org/swiftly/darwin/swiftly.pkg -o swiftly.pkg
+          installer -pkg swiftly.pkg -target CurrentUserHomeDirectory
+          ~/.swiftly/bin/swiftly init --quiet-shell-followup --assume-yes --skip-install
+          ~/.swiftly/bin/swiftly install --assume-yes "$SWIFT_VERSION"
+          echo "$HOME/.swiftly/bin" >> "$GITHUB_PATH"
+          bundle="swift-$SWIFT_VERSION-RELEASE_android.artifactbundle"
+          curl -fsSL "https://download.swift.org/swift-$SWIFT_VERSION-release/android-sdk/swift-$SWIFT_VERSION-RELEASE/$bundle.tar.gz" -o android-sdk.tar.gz
+          ~/.swiftly/bin/swiftly run swift sdk install "$PWD/android-sdk.tar.gz" "+$SWIFT_VERSION"
+          # Links the SDK to the NDK (sysroot and libc++).
+          setup=$(find "$HOME/Library/org.swift.swiftpm/swift-sdks/$bundle" -name 'setup-android-sdk.sh' | head -1)
+          [ -n "$setup" ] && bash "$setup"
+
+      # swift-java does not publish swiftkit-core to Maven Central yet;
+      # `Android/settings.gradle.kts` takes it from mavenLocal.
+      - name: swiftkit-core into mavenLocal
+        run: |
+          git clone --depth 1 --branch "$SWIFT_JAVA_VERSION" https://github.com/swiftlang/swift-java.git "$RUNNER_TEMP/swift-java"
+          cd "$RUNNER_TEMP/swift-java"
+          JAVA_HOME="$JAVA_HOME_25_ARM64" ./gradlew :SwiftKitCore:publishToMavenLocal --no-daemon
+
+      - name: Signing keys
+        id: keys
+        if: inputs.sign
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_KEYSTORE }}
+        run: |
+          if [ -z "$KEYSTORE" ]; then
+            echo "::warning::ANDROID_KEYSTORE missing; building debug"
+            echo "ready=false" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "$KEYSTORE" | base64 --decode > "$RUNNER_TEMP/upload.jks"
+          echo "ready=true" >> "$GITHUB_OUTPUT"
+
+      - name: Build and unit tests (debug)
+        if: steps.keys.outputs.ready != 'true'
+        working-directory: Android
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME_21_ARM64 }}
+        run: |
+          ./gradlew :phone:assembleDirectDebug :phone:testDirectDebugUnitTest --no-daemon --stacktrace
+          mkdir -p ../out && cp phone/build/outputs/apk/direct/debug/*.apk ../out/
+
+      # Both flavours: `direct` for GitHub, `play` for Google Play. The guard
+      # proves that the play build carries nothing of the direct one.
+      - name: Build (release, signed)
+        if: steps.keys.outputs.ready == 'true'
+        working-directory: Android
+        env:
+          JAVA_HOME: ${{ env.JAVA_HOME_21_ARM64 }}
+          SWIFTLY_ANDROID_KEYSTORE: ${{ runner.temp }}/upload.jks
+          SWIFTLY_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          SWIFTLY_ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          SWIFTLY_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          ./gradlew :phone:assembleDirectRelease :phone:bundlePlayRelease :phone:testDirectReleaseUnitTest --no-daemon --stacktrace
+          python3 ../Werkzeuge/store-guard-android.py
+          mkdir -p ../out
+          cp phone/build/outputs/apk/direct/release/*.apk phone/build/outputs/bundle/playRelease/*.aab ../out/
+
+      - name: Clean up keys
+        if: always()
+        run: rm -f "$RUNNER_TEMP/upload.jks"
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: swiftly-android
+          path: out/
+          if-no-files-found: error
+
+      - name: Unit test reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: android-unit-tests
+          path: Android/phone/build/reports/tests/
+          if-no-files-found: ignore

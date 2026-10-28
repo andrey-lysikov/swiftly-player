@@ -12,7 +12,7 @@
 # the old version. Periphery names such leftovers.
 #
 # **Takes a while.** Periphery builds each target once before it indexes --
-# expect a few minutes. Not a candidate for check.sh, but something to run
+# expect a few minutes. Not a candidate for the test workflow, but something to run
 # once after a larger restructuring.
 #
 #   Werkzeuge/find-dead.sh            all three Apple targets

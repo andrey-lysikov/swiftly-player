@@ -74,7 +74,7 @@ final class AccountSwitchTransition {
     static let log = Logger(subsystem: "de.paulherter.swiftly", category: "kontowechsel")
 
     /// To the system log **and** the app's log file - the latter is pulled
-    /// from the device with `Werkzeuge/fetch-log.sh`, with a timestamp per line.
+    /// from the device (Xcode, Devices and Simulators, the app container), with a timestamp per line.
     static func note(_ text: String) {
         log.info("\(text, privacy: .public)")
         AppLog.writeOut("[Kontowechsel] \(text)")

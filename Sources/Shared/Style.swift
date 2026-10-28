@@ -3805,7 +3805,7 @@ extension View {
     /// **This is the only bottom sheet of the app that sits flush with the screen's
     /// edge.** Apple's `.sheet` with a partial height floats on iOS 26 (margin all around,
     /// the page showing under it); see `Fallen/swiftui.md`. Every sheet that is not full
-    /// height comes through here, and `Werkzeuge/check.sh` fails on one that does not.
+    /// height comes through here, and `Werkzeuge/sheet-guard.py` (the test workflow) fails on one that does not.
     func sheet<ContentBody: View>(opened: Binding<Bool>, dimmed: Bool = true, light: Color? = nil, lightTint: Color? = nil,
                              @ViewBuilder content: @escaping () -> ContentBody) -> some View {
         modifier(SheetModifier(opened: opened, dimmed: dimmed, light: light, lightTint: lightTint, sheetContent: content))

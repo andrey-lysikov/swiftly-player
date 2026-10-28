@@ -35,19 +35,28 @@ xcodegen generate            # after any change to project.yml
 cd Packages/JellyfinKit && swift test
 ```
 
-Then open `Swiftly.xcodeproj` and build the scheme for your platform. VLCKit is
-fetched with `Werkzeuge/vlckit-fetch.sh`.
+Then open `Swiftly.xcodeproj` and build the scheme for your platform
+(`Swiftly-iOS`, `Swiftly-tvOS`, `Swiftly-macOS`; `project.yml` declares them, so
+they exist right after `xcodegen generate`). VLCKit is fetched with
+`Werkzeuge/vlckit-fetch.sh`.
 
-Everything Apple plus the package tests in one command:
+Android: `cd Android && ./gradlew :phone:assembleDirectDebug` (JDK 21, Android SDK
+with NDK 27, Swift 6.3.3 from swiftly with the Swift SDK for Android). The NDK is
+taken from `ANDROID_NDK_HOME`.
 
-```bash
-Werkzeuge/check.sh
-```
+Linux: `Linux/build.sh` (Swift 6, GTK 4.14, libVLC, rlottie from
+`Werkzeuge/rlottie-build.sh`). Windows: `Windows/build.ps1` (Visual Studio Build
+Tools and Swift are found on their own; rlottie from `Werkzeuge/rlottie-build.ps1`).
 
-Android: `cd Android && ./gradlew :phone:compileDebugKotlin` (JDK 17, Android SDK;
-`Werkzeuge/android-environment.sh` prepares the environment).
+**Checks and builds run on GitHub Actions:**
 
-Linux: `Linux/build.sh` (Swift 6, GTK 4.14, libVLC). Windows: `Windows/build.ps1`.
+- `Tests` (`.github/workflows/tests.yml`) runs on every push and pull request:
+  JellyfinKit tests, string catalog, Codable keys, licences, Android texts,
+  version numbers and the Xcode project.
+- `Build` (`.github/workflows/build.yml`) is started by hand: one platform or
+  all of them, from any branch, unsigned or signed with keys from the
+  repository secrets (listed at the top of the file). The results are the
+  run's artifacts.
 
 ## Rules for changes
 
