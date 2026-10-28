@@ -5,7 +5,7 @@
     python3 Werkzeuge/store-guard-android.py <play.aab|.apk> [--direct <direct.apk>]
     python3 Werkzeuge/store-guard-android.py --build         builds bundlePlayRelease and
                                                              assembleDirectRelease first
-    python3 Werkzeuge/store-guard-android.py --direct-only <direct.apk>   (sideload-apk.sh)
+    python3 Werkzeuge/store-guard-android.py --direct-only <direct.apk>   (the build workflow)
 
 **Why this exists.** Google Play refuses apps that point to payment outside Play Billing
 (AnkiDroid, 2026: a donation link alone). The Play flavor (`src/play`) must therefore contain
@@ -103,7 +103,7 @@ def main():
     if "--build" in args:
         args.remove("--build")
         env = dict(os.environ)
-        r = subprocess.run(["bash", "-c", f"source '{root}/Werkzeuge/android-environment.sh' >/dev/null && cd '{root}/Android' "
+        r = subprocess.run(["bash", "-c", f"cd '{root}/Android' "
                             "&& ./gradlew -q :phone:bundlePlayRelease :phone:assembleDirectRelease"], env=env)
         if r.returncode != 0:
             sys.exit("Build failed.")
