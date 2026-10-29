@@ -141,6 +141,7 @@ struct ServerView: View {
     @State private var address = ""
     /// "Advanced": custom headers for a service in front of the server.
     @State private var headers: [HeaderRow] = []
+    @State private var found: [FoundServer] = []
 
     var body: some View {
         VStack(spacing: 0) {
@@ -182,16 +183,54 @@ struct ServerView: View {
                     .frame(width: 900)
                     .padding(.top, 32)
             }
+
+            TVFoundServers(found: found) { server in
+                address = server.address
+                linkUp()
+            }
+            .frame(width: 760)
+            .padding(.top, 48)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         // Changing the address during the check cancels it.
         .onChange(of: address) { _, new in model.addressChanged(new) }
+        .serverSearch($found)
     }
 
     /// Button and the keyboard's send key meet here; a second send during the check is discarded by the model.
     private func linkUp() {
         guard !address.isEmpty else { return }
         model.connectStart(address, headers: headers.headers)
+    }
+}
+
+// MARK: - Servers on the network
+
+/// **The servers that answered on the local network**, as rows below the button.
+/// Nothing while none has answered, so a network without a server shows the page
+/// as before. A row is a choice like any setting row: the name, the address on the
+/// right, the whole row takes focus.
+struct TVFoundServers: View {
+    let found: [FoundServer]
+    let pick: (FoundServer) -> Void
+
+    var body: some View {
+        if !found.isEmpty {
+            VStack(alignment: .leading, spacing: 0) {
+                GroupsTitle(text: "Im Netzwerk gefunden")
+                ForEach(found) { server in
+                    Button { pick(server) } label: {
+                        HStack(spacing: 24) {
+                            Text(verbatim: server.name)
+                            Spacer(minLength: 40)
+                            Text(verbatim: server.shortAddress)
+                                .foregroundStyle(Theme.fontQuiet)
+                        }
+                    }
+                    .buttonStyle(RowsStyle())
+                }
+            }
+        }
     }
 }
 

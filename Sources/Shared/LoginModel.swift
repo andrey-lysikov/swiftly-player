@@ -93,6 +93,13 @@ extension AppModel {
 
     // MARK: - Quick Connect as a sign-in path
 
+    /// Whether the server has Quick Connect switched on; a page that offers only what
+    /// works asks before showing the button.
+    func quickConnectOffered() async -> Bool {
+        guard let client else { return false }
+        return await client.quickConnectAddBar()
+    }
+
     func quickConnectStart() async throws -> LoginCode {
         guard let client else { throw JellyfinError.notAuthenticated }
         return try await client.quickConnectStart()
