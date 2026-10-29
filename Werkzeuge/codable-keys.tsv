@@ -28,6 +28,8 @@ Android	FieldResponse	codable	aehnliche,extras
 Android	FieldResponse.CodingKeys	codingkey	aehnliche,extras
 Android	FileResponse	codable	container,hatUntertitel,ton,untertitel,video
 Android	FileResponse.CodingKeys	codingkey	container,hatUntertitel,ton,untertitel,video
+Android	FoundServerResponse	codable	adresse,id,kurz,name
+Android	FoundServerResponse.CodingKeys	codingkey	adresse,id,kurz,name
 Android	GridPagesResponse	codable	gesamt,titel
 Android	GridPagesResponse.CodingKeys	codingkey	gesamt,titel
 Android	GridTileResponse	codable	fortschritt,id,marke,markenzahl,plakat,titel,typ,unterzeile

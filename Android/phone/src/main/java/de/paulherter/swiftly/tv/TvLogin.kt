@@ -65,6 +65,7 @@ fun TvServerPage(app: SwiftlyApplication, connected: (String, String) -> Unit) {
     val focus = firstFocus()
     /** "Advanced": custom headers for a service in front of the server. */
     val headers = de.paulherter.swiftly.rememberHeaderRow()
+    val found = de.paulherter.swiftly.rememberFoundServers(app)
 
     fun linkUp() {
         if (address.isBlank() || running) return
@@ -115,7 +116,23 @@ fun TvServerPage(app: SwiftlyApplication, connected: (String, String) -> Unit) {
                 Text(it, style = TvTheme.body, color = Theme.warning, textAlign = TextAlign.Center,
                      modifier = Modifier.widthIn(max = 560.dp).padding(top = 18.dp))
             }
+            TvFoundServers(found, Modifier.padding(top = 28.dp)) { addressChange(it.address); linkUp() }
         }
+    }
+}
+
+/**
+ * Mirrors `TVFoundServers`: the servers that answered on the local network, as rows with the
+ * address on the right. Nothing while none has answered.
+ */
+@Composable
+fun TvFoundServers(found: List<de.paulherter.swiftly.FoundServer>, modifier: Modifier = Modifier,
+                   pick: (de.paulherter.swiftly.FoundServer) -> Unit) {
+    if (found.isEmpty()) return
+    Column(modifier.fillMaxWidth()) {
+        Text(translated("Im Netzwerk gefunden"), style = TvTheme.small, color = Theme.fontQuiet,
+             modifier = Modifier.padding(start = 13.dp, bottom = 8.dp))
+        found.forEach { server -> TvRow(server.name, right = server.short) { pick(server) } }
     }
 }
 
